@@ -1,0 +1,82 @@
+# This plugin is responsible of preparing Qubes OS source archives
+
+# In a normal build pipeline, it creates source archive as before
+# and copies it into $(ORIG_SRC)/pkgs/src directory. Then, it copies
+# the prepared source archive into the corresponding chroot.
+# If building package is not needed, we introduced a dummy
+# distribution called 'src' which allows to do nothing at build stages.
+# It helps releasing prepared sources.
+
+COMPONENT := $(notdir $(ORIG_SRC))
+
+VERSION :=
+ifneq (,$(wildcard $(ORIG_SRC)/version))
+VERSION := $(shell head -1 $(ORIG_SRC)/version)
+endif
+
+# NAME is defined in Makefile.builder
+GIT_TARBALL_NAME ?= $(NAME)-$(VERSION).tar.gz
+
+AUTOMATIC_UPLOAD ?= 0
+RELEASE ?= current-release
+
+# chroot 'qubes-src' location
+DIST_BUILD_DIR = /home/user
+
+# NO_ARCHIVE is used to indicate external sources like Xen.
+# This plugin creates archives for only internal Qubes OS components
+ifneq (1,$(NO_ARCHIVE))
+ifneq (,$(VERSION))
+
+SOURCE_PREP := tarball-generate $(SOURCE_PREP)
+
+ifeq ($(DIST),src)
+PACKAGE_LIST = $(GIT_TARBALL_NAME)
+dist-prep:
+	@true
+
+dist-prepare-chroot:
+	@true
+
+dist-build-dep:
+	@true
+
+dist-package:
+	@true
+
+dist-copy-out:
+	@true
+endif
+
+endif
+endif
+
+tarball-generate:
+	rm -rf $(CHROOT_DIR)/$(DIST_BUILD_DIR)/$(SRC_DIR)/$(COMPONENT)
+	mkdir -p $(CHROOT_DIR)/$(DIST_BUILD_DIR)/$(SRC_DIR)
+	cp -alt $(CHROOT_DIR)/$(DIST_BUILD_DIR)/$(SRC_DIR)/ $(ORIG_SRC)
+	git -C $(CHROOT_DIR)/$(DIST_BUILD_DIR)/$(SRC_DIR)/$(COMPONENT) clean -f -d -X
+	$(BUILDER_DIR)/scripts/create-archive $(CHROOT_DIR)/$(DIST_BUILD_DIR)/$(SRC_DIR)/$(COMPONENT) $(GIT_TARBALL_NAME)
+	mkdir -p $(ORIG_SRC)/pkgs/src
+	mv $(CHROOT_DIR)/$(DIST_BUILD_DIR)/$(SRC_DIR)/$(COMPONENT)/$(GIT_TARBALL_NAME) $(ORIG_SRC)/pkgs/src
+
+tarball-copy-in:
+	cp $(ORIG_SRC)/pkgs/src/$(GIT_TARBALL_NAME) $(CHROOT_DIR)$(DIST_SRC)
+
+sign-sources: sign_client = $(if $(GNUPG),$(GNUPG),gpg)
+sign-sources:
+ifeq (,$(PACKAGE_LIST))
+	@true
+else
+	$(sign_client) --detach-sign -o $(ORIG_SRC)/pkgs/src/$(GIT_TARBALL_NAME).asc $(ORIG_SRC)/pkgs/src/$(GIT_TARBALL_NAME)
+endif
+
+sign: sign-sources
+
+update-repo-sources: update-local-repo update-remote-repo
+
+update-local-repo:
+	@$(BUILDER_SRC_DIR)/update_local_repo.sh $(RELEASE)
+
+update-remote-repo:
+	@$(BUILDER_SRC_DIR)/update_remote_repo.sh $(RELEASE)
