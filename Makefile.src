@@ -23,6 +23,18 @@ RELEASE ?= current-release
 # chroot 'qubes-src' location
 DIST_BUILD_DIR = /home/user
 
+# Due to dummy dom0 dist "src" we remove the prefix
+BUILDER_REPO_SRC_DIR=$(subst dom0-,,$(BUILDER_REPO_DIR))
+
+ifeq ($(BRANCH_$(subst -,_,$(COMPONENT))),release$(RELEASE))
+SRC_RELEASE = $(RELEASE)
+else
+SRC_RELEASE = common
+endif
+
+UPDATE_REPO := $(subst dom0-src,src,$(UPDATE_REPO))/$(SRC_RELEASE)
+
+PACKAGE_LIST=
 # NO_ARCHIVE is used to indicate external sources like Xen.
 # This plugin creates archives for only internal Qubes OS components
 ifneq (1,$(NO_ARCHIVE))
@@ -32,6 +44,7 @@ SOURCE_PREP := tarball-generate $(SOURCE_PREP)
 
 ifeq ($(DIST),src)
 PACKAGE_LIST = $(GIT_TARBALL_NAME)
+
 dist-prep:
 	@true
 
@@ -52,13 +65,20 @@ endif
 endif
 
 tarball-generate:
+	# Copy ORIG_SRC into chroot acting as workdir
 	rm -rf $(CHROOT_DIR)/$(DIST_BUILD_DIR)/$(SRC_DIR)/$(COMPONENT)
 	mkdir -p $(CHROOT_DIR)/$(DIST_BUILD_DIR)/$(SRC_DIR)
 	cp -alt $(CHROOT_DIR)/$(DIST_BUILD_DIR)/$(SRC_DIR)/ $(ORIG_SRC)
+	# Clean non-git related
 	git -C $(CHROOT_DIR)/$(DIST_BUILD_DIR)/$(SRC_DIR)/$(COMPONENT) clean -f -d -X
+	# Create archive
 	$(BUILDER_DIR)/scripts/create-archive $(CHROOT_DIR)/$(DIST_BUILD_DIR)/$(SRC_DIR)/$(COMPONENT) $(GIT_TARBALL_NAME)
+	# Copy created archive into ORIG_SRC
 	mkdir -p $(ORIG_SRC)/pkgs/src
 	mv $(CHROOT_DIR)/$(DIST_BUILD_DIR)/$(SRC_DIR)/$(COMPONENT)/$(GIT_TARBALL_NAME) $(ORIG_SRC)/pkgs/src
+	# Update qubes-packages-mirror-repo/src
+	mkdir -p $(BUILDER_REPO_SRC_DIR)/common $(BUILDER_REPO_SRC_DIR)/$(RELEASE)
+	ln -f -t $(BUILDER_REPO_SRC_DIR)/$(SRC_RELEASE) $(ORIG_SRC)/pkgs/src/$(GIT_TARBALL_NAME)
 
 tarball-copy-in:
 	cp $(ORIG_SRC)/pkgs/src/$(GIT_TARBALL_NAME) $(CHROOT_DIR)$(DIST_SRC)
@@ -69,14 +89,28 @@ ifeq (,$(PACKAGE_LIST))
 	@true
 else
 	$(sign_client) --detach-sign -o $(ORIG_SRC)/pkgs/src/$(GIT_TARBALL_NAME).asc $(ORIG_SRC)/pkgs/src/$(GIT_TARBALL_NAME)
+	ln -f -t $(BUILDER_REPO_SRC_DIR)/$(SRC_RELEASE) $(ORIG_SRC)/pkgs/src/$(GIT_TARBALL_NAME).asc
 endif
 
 sign: sign-sources
 
-update-repo-sources: update-local-repo update-remote-repo
-
-update-local-repo:
-	@$(BUILDER_SRC_DIR)/update_local_repo.sh $(RELEASE)
-
-update-remote-repo:
+update-repo:
+ifndef UPDATE_REPO
+	$(error "You need to specify destination repo in UPDATE_REPO variable")
+endif
 	@$(BUILDER_SRC_DIR)/update_remote_repo.sh $(RELEASE)
+ifdef SNAPSHOT_FILE
+	@cd $(ORIG_SRC) && echo $(GIT_TARBALL_NAME) > $(subst dom0-src,src,$(SNAPSHOT_FILE))
+endif
+
+update-repo-from-snapshot-do:
+ifndef UPDATE_REPO
+	$(error "You need to specify destination repo in UPDATE_REPO variable")
+endif
+	ln -f $(subst /$(TARGET_REPO)/,/$(SNAPSHOT_REPO)/,$(UPDATE_REPO)/)/$(GIT_TARBALL_NAME) $(UPDATE_REPO) || exit 1; \
+
+check-repo:
+ifndef UPDATE_REPO
+	$(error "You need to specify destination repo in UPDATE_REPO variable")
+endif
+	cd $(ORIG_SRC) && ls $(UPDATE_REPO)/$(GIT_TARBALL_NAME) >/dev/null 2>&1 || exit 1; \
